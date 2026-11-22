@@ -4,10 +4,34 @@
 #include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <SensirionI2CScd4x.h>
+#include "iot_pins.h"
 #include "secrets.h"
 
 SensirionI2CScd4x scd4x;
 uint32_t seq = 0;
+constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
+constexpr uint32_t MEASUREMENT_INTERVAL_MS = 5000;
+uint32_t lastMeasurementCheckMs = 0;
+
+void checkButton2() {
+  static int lastReading = HIGH;
+  static int stableReading = HIGH;
+  static uint32_t lastChangeMs = 0;
+
+  const int reading = digitalRead(IoTPins::BUTTON_2);
+  const uint32_t now = millis();
+  if (reading != lastReading) {
+    lastReading = reading;
+    lastChangeMs = now;
+  }
+
+  if (reading != stableReading && now - lastChangeMs >= BUTTON_DEBOUNCE_MS) {
+    stableReading = reading;
+    if (stableReading == LOW) {
+      Serial.println("Button 2 pressed");
+    }
+  }
+}
 
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
@@ -84,6 +108,7 @@ void sendToFirebase(uint16_t co2, float tempC, float humPct) {
 
 void setup() {
   Serial.begin(115200);
+  pinMode(IoTPins::BUTTON_2, INPUT_PULLUP);
   delay(500);
 
   // Default ESP32 I2C pins: SDA = 21, SCL = 22
@@ -102,10 +127,15 @@ void setup() {
   }
 
   connectWiFi();
+  lastMeasurementCheckMs = millis();
 }
 
 void loop() {
-  delay(5000); // SCD40 internal measurement cycle is 5 seconds
+  checkButton2();
+
+  const uint32_t now = millis();
+  if (now - lastMeasurementCheckMs < MEASUREMENT_INTERVAL_MS) return;
+  lastMeasurementCheckMs = now;
 
   bool dataReady = false;
   uint16_t error = scd4x.getDataReadyFlag(dataReady);
