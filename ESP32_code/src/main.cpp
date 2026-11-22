@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <SensirionI2CScd4x.h>
 #include "iot_pins.h"
+#include "iot_display.h"
 #include "secrets.h"
 
 SensirionI2CScd4x scd4x;
@@ -12,6 +13,65 @@ uint32_t seq = 0;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
 constexpr uint32_t MEASUREMENT_INTERVAL_MS = 5000;
 uint32_t lastMeasurementCheckMs = 0;
+
+constexpr uint16_t FIRST_RED_PPM = 1201;
+constexpr size_t SAMPLE_COUNT = 13;  // One minute at the normal sampling interval.
+struct Co2Sample {
+  uint32_t timeMs;
+  uint16_t ppm;
+};
+Co2Sample samples[SAMPLE_COUNT];
+size_t nextSample = 0;
+size_t samplesUsed = 0;
+
+void recordCo2(uint16_t ppm) {
+  samples[nextSample] = {millis(), ppm};
+  nextSample = (nextSample + 1) % SAMPLE_COUNT;
+  if (samplesUsed < SAMPLE_COUNT) ++samplesUsed;
+}
+
+void showCo2Forecast() {
+  static bool displayReady = false;
+  if (!displayReady) {
+    displayReady = iotInitDisplay();
+    if (!displayReady) return;
+  }
+
+  if (samplesUsed == 0) {
+    iotDisplayLines("Waiting for CO2 data");
+    return;
+  }
+
+  const Co2Sample& latest = samples[(nextSample + SAMPLE_COUNT - 1) % SAMPLE_COUNT];
+  const String current = String("CO2: ") + latest.ppm + " ppm";
+  if (millis() - latest.timeMs > 15000) {
+    iotDisplayLines(current, "Reading is stale");
+    return;
+  }
+
+  const bool alreadyRed = latest.ppm >= FIRST_RED_PPM;
+  // Once the buffer is full, nextSample points to the oldest reading.
+  const Co2Sample& oldest = samples[nextSample];
+  const uint32_t elapsedMs = latest.timeMs - oldest.timeMs;
+  if (samplesUsed < SAMPLE_COUNT || elapsedMs == 0 || elapsedMs > 90000) {
+    iotDisplayLines(current, "Collecting trend...", alreadyRed ? "Already RED" : "");
+    return;
+  }
+
+  const float rate = (int(latest.ppm) - int(oldest.ppm)) * 60000.0f / elapsedMs;
+  const String trend = String("Rate: ") + (rate > 0 ? "+" : "") + String(rate, 1) + " ppm/min";
+  String estimate;
+  if (alreadyRed) {
+    estimate = "Already RED";
+  } else if (rate <= 0) {
+    estimate = "CO2 flat or falling";
+  } else {
+    const float minutes = (FIRST_RED_PPM - latest.ppm) / rate;
+    estimate = minutes < 1 ? String("RED in <1 min")
+                           : String("RED in ~") + String(minutes, 0) + " min";
+  }
+  iotDisplayLines(current, trend, estimate);
+}
 
 void checkButton2() {
   static int lastReading = HIGH;
@@ -29,6 +89,7 @@ void checkButton2() {
     stableReading = reading;
     if (stableReading == LOW) {
       Serial.println("Button 2 pressed");
+      showCo2Forecast();
     }
   }
 }
@@ -154,5 +215,6 @@ void loop() {
     return;
   }
 
+  recordCo2(co2);
   sendToFirebase(co2, tempC, humPct);
 }
