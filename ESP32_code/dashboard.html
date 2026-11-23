@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Study Not Stuffy — Live CO2 Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 2rem; }
+    .container { max-width: 850px; margin: auto; }
+    .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .hero { display: flex; justify-content: space-between; align-items: center; }
+    .ppm { font-size: 4rem; font-weight: 800; margin: 0; }
+    .badge { padding: 0.5rem 1rem; border-radius: 999px; font-weight: 700; font-size: 1.1rem; }
+    .GREEN { background: #166534; color: #bbf7d0; }
+    .YELLOW { background: #854d0e; color: #fef08a; }
+    .RED { background: #991b1b; color: #fecaca; }
+    .meta { color: #94a3b8; font-size: 0.95rem; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Study Not Stuffy — Group 12</h1>
+
+    <div class="card hero">
+      <div>
+        <div style="color:#94a3b8; font-size:0.9rem;">LIVE ROOM CO₂ LEVEL</div>
+        <p class="ppm"><span id="co2Val">--</span> <span style="font-size:1.5rem;">ppm</span></p>
+        <div class="meta" id="metaInfo">Waiting for sensor data...</div>
+      </div>
+      <div id="statusBadge" class="badge GREEN">CONNECTING</div>
+    </div>
+
+    <div class="card">
+      <canvas id="co2Chart" height="120"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // PASTE YOUR FIREBASE DATABASE URL HERE (no trailing slash):
+    const FIREBASE_HOST = "https://study-not-stuffy-default-rtdb.firebaseio.com";
+
+    const ctx = document.getElementById("co2Chart").getContext("2d");
+    const co2Chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "CO₂ Concentration (ppm)",
+          data: [],
+          borderColor: "#38bdf8",
+          backgroundColor: "rgba(56, 189, 248, 0.15)",
+          borderWidth: 2,
+          tension: 0.25,
+          fill: true
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } },
+          y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" }, suggestedMin: 400 }
+        },
+        plugins: { legend: { labels: { color: "#f8fafc" } } }
+      }
+    });
+
+    async function fetchData() {
+      try {
+        const latestRes = await fetch(`${FIREBASE_HOST}/devices/group12/latest.json`);
+        const latest = await latestRes.json();
+
+        if (latest) {
+          document.getElementById("co2Val").textContent = latest.co2_ppm;
+          const badge = document.getElementById("statusBadge");
+          badge.textContent = latest.status;
+          badge.className = `badge ${latest.status}`;
+
+          const timeStr = latest.server_ts ? new Date(latest.server_ts).toLocaleTimeString() : "just now";
+          document.getElementById("metaInfo").textContent =
+            `Temp: ${latest.temp_c}°C | Humidity: ${latest.humidity_pct}% | Seq #${latest.seq} | Last update: ${timeStr}`;
+        }
+
+        const histRes = await fetch(`${FIREBASE_HOST}/devices/group12/history.json?orderBy="$key"&limitToLast=30`);
+        const hist = await histRes.json();
+
+        if (hist) {
+          const entries = Object.values(hist);
+          co2Chart.data.labels = entries.map(e =>
+            e.server_ts ? new Date(e.server_ts).toLocaleTimeString() : `#${e.seq}`
+          );
+          co2Chart.data.datasets[0].data = entries.map(e => e.co2_ppm);
+          co2Chart.update("none");
+        }
+      } catch (err) {
+        console.error("Fetch error:", err);
+      }
+    }
+
+    fetchData();
+    setInterval(fetchData, 3000);
+  </script>
+</body>
+</html>
